@@ -134,14 +134,12 @@ fn growNodes(allocator: std.mem.Allocator, nodes: *std.ArrayList(Node)) !void {
     }
 }
 
-pub fn main() !void {
-    r.InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Space Colonization Algorithm");
-    defer r.CloseWindow();
+const Variant = enum {
+    leaf,
+    tree,
+};
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
-    defer arena.deinit();
-
+fn draw_leaf(arena: *std.heap.ArenaAllocator) !void {
     var aux_buf: [MAX_AUXINS]Auxin = undefined;
     var auxins = std.ArrayList(Auxin).initBuffer(&aux_buf);
 
@@ -151,8 +149,6 @@ pub fn main() !void {
         .position = genRandomPos(),
         .direction = r.Vector2{ .x = 0, .y = 0 },
     });
-
-    r.SetTargetFPS(60);
 
     while (!r.WindowShouldClose()) {
         if (r.IsKeyDown(r.KEY_SPACE)) {
@@ -185,5 +181,60 @@ pub fn main() !void {
         }
 
         r.EndDrawing();
+    }
+}
+
+fn draw_tree(arena: *std.heap.ArenaAllocator) !void {
+    _ = arena;
+    var camera: r.Camera3D = undefined;
+    camera.position = .{ .x = 10.0, .y = 10.0, .z = 10.0 }; // Sit at a corner
+    camera.target = .{ .x = 0.0, .y = 0.0, .z = 0.0 }; // Look at the center
+    camera.up = .{ .x = 0.0, .y = 1.0, .z = 0.0 }; // Y-axis is UP
+    camera.fovy = 45.0; // Standard lens
+    camera.projection = r.CAMERA_PERSPECTIVE; // 3D depth
+
+    r.DisableCursor();
+
+    while (!r.WindowShouldClose()) {
+        r.UpdateCamera(&camera, r.CAMERA_FREE);
+        r.BeginDrawing();
+        {
+            r.ClearBackground(BG_COLOR);
+
+            r.BeginMode3D(camera);
+            {
+                // Draw a red cube at (0, 0, 0) with size 2.0
+                r.DrawCube(.{ .x = 0.0, .y = 0.0, .z = 0.0 }, 2.0, 2.0, 2.0, r.RED);
+
+                // Draw a wireframe around it so we can see edges
+                r.DrawCubeWires(.{ .x = 0.0, .y = 0.0, .z = 0.0 }, 2.0, 2.0, 2.0, r.MAROON);
+
+                // Draw a grid on the floor
+                r.DrawGrid(10, 1.0);
+            }
+            r.EndMode3D();
+        }
+
+        r.EndDrawing();
+    }
+}
+
+pub fn main() !void {
+    var arg_iter = std.process.args();
+    _ = arg_iter.next(); // skip program name
+
+    const variant = std.meta.stringToEnum(Variant, (arg_iter.next() orelse "leaf")) orelse Variant.leaf;
+
+    r.InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Space Colonization Algorithm");
+    defer r.CloseWindow();
+    r.SetTargetFPS(60);
+
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+
+    switch (variant) {
+        .leaf => try draw_leaf(&arena),
+        .tree => try draw_tree(&arena),
     }
 }
