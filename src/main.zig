@@ -8,42 +8,61 @@ const BG_COLOR = r.Color{ .r = 10, .g = 10, .b = 10, .a = 255 };
 const RADIUS = 15;
 
 const AUXIN_COLOR = r.PURPLE;
+const AUXIN_RADIUS_3D = 3; // Smaller auxins for 3D
 const AUXIN_DEATH_CIRCLE = 35;
-const AUXIN_SPAWN_RATE = 10;
+const AUXIN_SPAWN_RATE = 15;
 const MAX_AUXINS = 1000;
 
 const NODE_COLOR = r.GREEN;
+const BRANCH_COLOR = r.BROWN;
 const CENTER_COLOR = r.YELLOW;
 
 const SCREEN_WIDTH = 1280;
 const SCREEN_HEIGHT = 960;
 
-const Auxin = struct {
-    position: r.Vector2,
-};
+const BOUNDS_MIN = r.Vector3{ .x = -150, .y = -50, .z = -150 };
+const BOUNDS_MAX = r.Vector3{ .x = 150, .y = 300, .z = 150 };
 
-const Node = struct {
-    position: r.Vector2,
-    direction: r.Vector2,
-};
-
-fn genRandomPos() r.Vector2 {
-    return r.Vector2{
-        .x = @floatFromInt(r.GetRandomValue(0, SCREEN_WIDTH)),
-        .y = @floatFromInt(r.GetRandomValue(0, SCREEN_HEIGHT)),
+fn Auxin(comptime T: type) type {
+    return struct {
+        position: T,
     };
 }
 
-fn genAuxins(auxins: *std.ArrayList(Auxin)) !void {
+fn Node(comptime T: type) type {
+    return struct {
+        position: T,
+        direction: T,
+    };
+}
+
+fn genRandomPos(comptime T: type) T {
+    switch (T) {
+        r.Vector2 => return r.Vector2{
+            .x = @floatFromInt(r.GetRandomValue(0, SCREEN_WIDTH)),
+            .y = @floatFromInt(r.GetRandomValue(0, SCREEN_HEIGHT)),
+        },
+        r.Vector3 => {
+            return r.Vector3{
+                .x = @floatFromInt(r.GetRandomValue(@intFromFloat(BOUNDS_MIN.x), @intFromFloat(BOUNDS_MAX.x))),
+                .y = @floatFromInt(r.GetRandomValue(@intFromFloat(BOUNDS_MIN.y), @intFromFloat(BOUNDS_MAX.y))),
+                .z = @floatFromInt(r.GetRandomValue(@intFromFloat(BOUNDS_MIN.z), @intFromFloat(BOUNDS_MAX.z))),
+            };
+        },
+        else => @compileError("Unsupported type"),
+    }
+}
+
+fn genAuxins(comptime T: type, auxins: *std.ArrayList(Auxin(T))) !void {
     for (0..AUXIN_SPAWN_RATE) |_| {
-        const pos = genRandomPos();
-        try auxins.appendBounded(Auxin{
+        const pos = genRandomPos(T);
+        try auxins.appendBounded(.{
             .position = pos,
         });
     }
 }
 
-fn killAuxins(auxins: *std.ArrayList(Auxin), nodes: *std.ArrayList(Node), first_clear: bool) !void {
+fn killAuxins(comptime T: type, auxins: *std.ArrayList(Auxin(T)), nodes: *std.ArrayList(Node(T)), first_clear: bool) !void {
     var buf: [MAX_AUXINS]usize = undefined;
     var indices_to_remove = std.ArrayList(usize).initBuffer(&buf);
 
@@ -51,7 +70,12 @@ fn killAuxins(auxins: *std.ArrayList(Auxin), nodes: *std.ArrayList(Node), first_
         for (auxins.items, 0..) |auxin_a, i| {
             for (auxins.items, 0..) |auxin_b, j| {
                 if (i != j) {
-                    const dist = r.Vector2Distance(auxin_a.position, auxin_b.position);
+                    const dist = switch (T) {
+                        r.Vector2 => r.Vector2Distance(auxin_a.position, auxin_b.position),
+                        r.Vector3 => r.Vector3Distance(auxin_a.position, auxin_b.position),
+                        else => @compileError("Unsupported type"),
+                    };
+
                     if (dist < AUXIN_DEATH_CIRCLE) {
                         try indices_to_remove.appendBounded(i);
                         break;
@@ -71,7 +95,11 @@ fn killAuxins(auxins: *std.ArrayList(Auxin), nodes: *std.ArrayList(Node), first_
 
     for (auxins.items, 0..) |auxin, i| {
         for (nodes.items) |node| {
-            const dist = r.Vector2Distance(auxin.position, node.position);
+            const dist = switch (T) {
+                r.Vector2 => r.Vector2Distance(auxin.position, node.position),
+                r.Vector3 => r.Vector3Distance(auxin.position, node.position),
+                else => @compileError("Unsupported type"),
+            };
             if (dist < AUXIN_DEATH_CIRCLE) {
                 try indices_to_remove.appendBounded(i);
                 break;
@@ -86,45 +114,74 @@ fn killAuxins(auxins: *std.ArrayList(Auxin), nodes: *std.ArrayList(Node), first_
     }
 }
 
-fn calculateGrowthDir(auxins: *std.ArrayList(Auxin), nodes: *std.ArrayList(Node)) !void {
+fn calculateGrowthDir(comptime T: type, auxins: *std.ArrayList(Auxin(T)), nodes: *std.ArrayList(Node(T))) !void {
     for (auxins.items) |auxin| {
         var closest_idx: usize = 0;
         var min_dist = std.math.floatMax(f32);
 
         for (nodes.items, 0..) |node, i| {
-            const dist = r.Vector2Distance(auxin.position, node.position);
+            const dist = switch (T) {
+                r.Vector2 => r.Vector2Distance(auxin.position, node.position),
+                r.Vector3 => r.Vector3Distance(auxin.position, node.position),
+                else => @compileError("Unsupported type"),
+            };
             if (dist < min_dist) {
                 min_dist = dist;
                 closest_idx = i;
             }
         }
 
-        nodes.items[closest_idx].direction = r.Vector2Add(
-            nodes.items[closest_idx].direction,
-            r.Vector2Subtract(auxin.position, nodes.items[closest_idx].position),
-        );
+        const new_dir = switch (T) {
+            r.Vector2 => r.Vector2Add(nodes.items[closest_idx].direction, r.Vector2Subtract(auxin.position, nodes.items[closest_idx].position)),
+            r.Vector3 => r.Vector3Add(nodes.items[closest_idx].direction, r.Vector3Subtract(auxin.position, nodes.items[closest_idx].position)),
+            else => @compileError("Unsupported type"),
+        };
+        nodes.items[closest_idx].direction = new_dir;
     }
 
     for (nodes.items) |*node| {
-        if (r.Vector2Length(node.direction) > 0) {
-            node.direction = r.Vector2Normalize(node.direction);
+        const len = switch (T) {
+            r.Vector2 => r.Vector2Length(node.direction),
+            r.Vector3 => r.Vector3Length(node.direction),
+            else => @compileError("Unsupported type"),
+        };
+        if (len > 0) {
+            const dir = switch (T) {
+                r.Vector2 => r.Vector2Normalize(node.direction),
+                r.Vector3 => r.Vector3Normalize(node.direction),
+                else => @compileError("Unsupported type"),
+            };
+            node.direction = dir;
         }
     }
 }
 
-fn growNodes(allocator: std.mem.Allocator, nodes: *std.ArrayList(Node)) !void {
-    var new_nodes: std.ArrayList(Node) = std.ArrayList(Node).empty;
+fn growNodes(comptime T: type, allocator: std.mem.Allocator, nodes: *std.ArrayList(Node(T))) !void {
+    var new_nodes: std.ArrayList(Node(T)) = .empty;
     defer new_nodes.deinit(allocator);
 
     for (nodes.items) |node| {
-        if (r.Vector2Length(node.direction) > 0) {
-            const new_pos = r.Vector2Add(
-                node.position,
-                r.Vector2Scale(node.direction, RADIUS * 2),
-            );
+        const len = switch (T) {
+            r.Vector2 => r.Vector2Length(node.direction),
+            r.Vector3 => r.Vector3Length(node.direction),
+            else => @compileError("Unsupported type"),
+        };
+
+        if (len > 0) {
+            const new_pos = switch (T) {
+                r.Vector2 => r.Vector2Add(
+                    node.position,
+                    r.Vector2Scale(node.direction, RADIUS * 2),
+                ),
+                r.Vector3 => r.Vector3Add(
+                    node.position,
+                    r.Vector3Scale(node.direction, RADIUS * 3),
+                ),
+                else => @compileError("Unsupported type"),
+            };
             try new_nodes.append(allocator, .{
                 .position = new_pos,
-                .direction = r.Vector2{ .x = 0, .y = 0 },
+                .direction = std.mem.zeroes(T),
             });
         }
     }
@@ -140,30 +197,30 @@ const Variant = enum {
 };
 
 fn draw_leaf(arena: *std.heap.ArenaAllocator) !void {
-    var aux_buf: [MAX_AUXINS]Auxin = undefined;
-    var auxins = std.ArrayList(Auxin).initBuffer(&aux_buf);
+    var aux_buf: [MAX_AUXINS]Auxin(r.Vector2) = undefined;
+    var auxins = std.ArrayList(Auxin(r.Vector2)).initBuffer(&aux_buf);
 
     const node_alloc = arena.allocator();
-    var nodes = std.ArrayList(Node).empty;
+    var nodes = std.ArrayList(Node(r.Vector2)).empty;
     try nodes.append(node_alloc, .{
-        .position = genRandomPos(),
+        .position = genRandomPos(r.Vector2),
         .direction = r.Vector2{ .x = 0, .y = 0 },
     });
 
     while (!r.WindowShouldClose()) {
         if (r.IsKeyDown(r.KEY_SPACE)) {
-            try genAuxins(&auxins);
-            try killAuxins(&auxins, &nodes, true);
-            try calculateGrowthDir(&auxins, &nodes);
-            try growNodes(node_alloc, &nodes);
-            try killAuxins(&auxins, &nodes, false);
+            try genAuxins(r.Vector2, &auxins);
+            try killAuxins(r.Vector2, &auxins, &nodes, true);
+            try calculateGrowthDir(r.Vector2, &auxins, &nodes);
+            try growNodes(r.Vector2, node_alloc, &nodes);
+            try killAuxins(r.Vector2, &auxins, &nodes, false);
         }
 
         if (r.IsKeyPressed(r.KEY_R)) {
             auxins.clearRetainingCapacity();
             nodes.clearRetainingCapacity();
             try nodes.append(node_alloc, .{
-                .position = genRandomPos(),
+                .position = genRandomPos(r.Vector2),
                 .direction = r.Vector2{ .x = 0, .y = 0 },
             });
         }
@@ -185,32 +242,72 @@ fn draw_leaf(arena: *std.heap.ArenaAllocator) !void {
 }
 
 fn draw_tree(arena: *std.heap.ArenaAllocator) !void {
-    _ = arena;
+    var aux_buf: [MAX_AUXINS]Auxin(r.Vector3) = undefined;
+    var auxins = std.ArrayList(Auxin(r.Vector3)).initBuffer(&aux_buf);
+
+    const node_alloc = arena.allocator();
+    var nodes = std.ArrayList(Node(r.Vector3)).empty;
+
+    try nodes.append(node_alloc, .{
+        .position = .{ .x = 0, .y = 0, .z = 0 },
+        .direction = .{ .x = 0, .y = 0, .z = 0 },
+    });
+
     var camera: r.Camera3D = undefined;
-    camera.position = .{ .x = 10.0, .y = 10.0, .z = 10.0 }; // Sit at a corner
-    camera.target = .{ .x = 0.0, .y = 0.0, .z = 0.0 }; // Look at the center
-    camera.up = .{ .x = 0.0, .y = 1.0, .z = 0.0 }; // Y-axis is UP
-    camera.fovy = 45.0; // Standard lens
-    camera.projection = r.CAMERA_PERSPECTIVE; // 3D depth
+    camera.position = .{ .x = 250.0, .y = 150.0, .z = 250.0 };
+    camera.target = .{ .x = 0.0, .y = 100.0, .z = 0.0 };
+    camera.up = .{ .x = 0.0, .y = 1.0, .z = 0.0 };
+    camera.fovy = 60.0;
+    camera.projection = r.CAMERA_PERSPECTIVE;
 
     r.DisableCursor();
 
+    const connection_dist = RADIUS * 3.5;
+    const n_sides = 6;
     while (!r.WindowShouldClose()) {
-        r.UpdateCamera(&camera, r.CAMERA_FREE);
+        if (r.IsKeyDown(r.KEY_SPACE)) {
+            try genAuxins(r.Vector3, &auxins);
+            try killAuxins(r.Vector3, &auxins, &nodes, true);
+            try calculateGrowthDir(r.Vector3, &auxins, &nodes);
+            try growNodes(r.Vector3, node_alloc, &nodes);
+            try killAuxins(r.Vector3, &auxins, &nodes, false);
+        }
+
+        if (r.IsKeyPressed(r.KEY_R)) {
+            auxins.clearRetainingCapacity();
+            nodes.clearRetainingCapacity();
+            try nodes.append(node_alloc, .{
+                .position = .{ .x = 0, .y = 0, .z = 0 },
+                .direction = .{ .x = 0, .y = 0, .z = 0 },
+            });
+        }
+
+        r.UpdateCamera(&camera, r.CAMERA_ORBITAL);
+
         r.BeginDrawing();
         {
             r.ClearBackground(BG_COLOR);
 
             r.BeginMode3D(camera);
             {
-                // Draw a red cube at (0, 0, 0) with size 2.0
-                r.DrawCube(.{ .x = 0.0, .y = 0.0, .z = 0.0 }, 2.0, 2.0, 2.0, r.RED);
+                r.DrawBoundingBox(
+                    r.BoundingBox{ .min = BOUNDS_MIN, .max = BOUNDS_MAX },
+                    r.DARKGRAY,
+                );
 
-                // Draw a wireframe around it so we can see edges
-                r.DrawCubeWires(.{ .x = 0.0, .y = 0.0, .z = 0.0 }, 2.0, 2.0, 2.0, r.MAROON);
+                for (auxins.items) |auxin| {
+                    r.DrawSphere(auxin.position, AUXIN_RADIUS_3D, AUXIN_COLOR);
+                }
 
-                // Draw a grid on the floor
-                r.DrawGrid(10, 1.0);
+                for (nodes.items, 0..) |node_a, i| {
+                    for (nodes.items[i + 1 ..]) |node_b| {
+                        const dist = r.Vector3Distance(node_a.position, node_b.position);
+                        if (dist > 0.1 and dist < connection_dist) {
+                            const radius = @as(f32, RADIUS) * 0.3;
+                            r.DrawCylinderEx(node_a.position, node_b.position, radius, radius, n_sides, BRANCH_COLOR);
+                        }
+                    }
+                }
             }
             r.EndMode3D();
         }
