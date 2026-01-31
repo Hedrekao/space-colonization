@@ -5,23 +5,31 @@ const r = @cImport({
 });
 
 const BG_COLOR = r.Color{ .r = 10, .g = 10, .b = 10, .a = 255 };
+const AUXIN_COLOR = r.PURPLE;
+const NODE_COLOR = r.GREEN;
+const BRANCH_COLOR = r.BROWN;
+const TRUNK_COLOR = r.DARKBROWN;
+const CENTER_COLOR = r.YELLOW;
+
 const RADIUS = 15;
 
-const AUXIN_COLOR = r.PURPLE;
-const AUXIN_RADIUS_3D = 3; // Smaller auxins for 3D
 const AUXIN_DEATH_CIRCLE = 35;
 const AUXIN_SPAWN_RATE = 15;
 const MAX_AUXINS = 1000;
 
-const NODE_COLOR = r.GREEN;
-const BRANCH_COLOR = r.BROWN;
-const CENTER_COLOR = r.YELLOW;
-
 const SCREEN_WIDTH = 1280;
 const SCREEN_HEIGHT = 960;
 
-const BOUNDS_MIN = r.Vector3{ .x = -150, .y = -50, .z = -150 };
-const BOUNDS_MAX = r.Vector3{ .x = 150, .y = 300, .z = 150 };
+const TRUNK_BASE_HEIGHT = 100;
+const TRUNK_HEIGHT_IN_CROWN = 80; // How much trunk extends into crown
+const TRUNK_TOTAL_HEIGHT = TRUNK_BASE_HEIGHT + TRUNK_HEIGHT_IN_CROWN;
+const TRUNK_RADIUS = 20;
+
+const BRANCH_BASE_RADIUS = @as(f32, RADIUS) * 0.4;
+const CYLINDER_SIDES = 12;
+
+const BOUNDS_MIN = r.Vector3{ .x = -150, .y = TRUNK_BASE_HEIGHT, .z = -150 };
+const BOUNDS_MAX = r.Vector3{ .x = 150, .y = TRUNK_BASE_HEIGHT + 300, .z = 150 };
 
 fn Auxin(comptime T: type) type {
     return struct {
@@ -33,6 +41,8 @@ fn Node(comptime T: type) type {
     return struct {
         position: T,
         direction: T,
+        depth: u32,
+        parent: ?usize,
     };
 }
 
@@ -160,7 +170,7 @@ fn growNodes(comptime T: type, allocator: std.mem.Allocator, nodes: *std.ArrayLi
     var new_nodes: std.ArrayList(Node(T)) = .empty;
     defer new_nodes.deinit(allocator);
 
-    for (nodes.items) |node| {
+    for (nodes.items, 0..) |node, parent_idx| {
         const len = switch (T) {
             r.Vector2 => r.Vector2Length(node.direction),
             r.Vector3 => r.Vector3Length(node.direction),
@@ -179,9 +189,12 @@ fn growNodes(comptime T: type, allocator: std.mem.Allocator, nodes: *std.ArrayLi
                 ),
                 else => @compileError("Unsupported type"),
             };
+
             try new_nodes.append(allocator, .{
                 .position = new_pos,
                 .direction = std.mem.zeroes(T),
+                .parent = parent_idx,
+                .depth = node.depth + 1,
             });
         }
     }
@@ -204,7 +217,9 @@ fn draw_leaf(arena: *std.heap.ArenaAllocator) !void {
     var nodes = std.ArrayList(Node(r.Vector2)).empty;
     try nodes.append(node_alloc, .{
         .position = genRandomPos(r.Vector2),
-        .direction = r.Vector2{ .x = 0, .y = 0 },
+        .direction = std.mem.zeroes(r.Vector2),
+        .parent = null,
+        .depth = 0,
     });
 
     while (!r.WindowShouldClose()) {
@@ -221,7 +236,9 @@ fn draw_leaf(arena: *std.heap.ArenaAllocator) !void {
             nodes.clearRetainingCapacity();
             try nodes.append(node_alloc, .{
                 .position = genRandomPos(r.Vector2),
-                .direction = r.Vector2{ .x = 0, .y = 0 },
+                .direction = std.mem.zeroes(r.Vector2),
+                .parent = null,
+                .depth = 0,
             });
         }
 
@@ -241,6 +258,17 @@ fn draw_leaf(arena: *std.heap.ArenaAllocator) !void {
     }
 }
 
+inline fn resetTreeStartingNodes(node_alloc: std.mem.Allocator, nodes: *std.ArrayList(Node(r.Vector3)), trunk_spacing: f32) !void {
+    for (0..3) |i| {
+        try nodes.append(node_alloc, .{
+            .position = .{ .x = 0, .y = TRUNK_BASE_HEIGHT + trunk_spacing * @as(f32, @floatFromInt(i + 1)), .z = 0 },
+            .direction = std.mem.zeroes(r.Vector3),
+            .parent = null,
+            .depth = 0,
+        });
+    }
+}
+
 fn draw_tree(arena: *std.heap.ArenaAllocator) !void {
     var aux_buf: [MAX_AUXINS]Auxin(r.Vector3) = undefined;
     var auxins = std.ArrayList(Auxin(r.Vector3)).initBuffer(&aux_buf);
@@ -248,24 +276,14 @@ fn draw_tree(arena: *std.heap.ArenaAllocator) !void {
     const node_alloc = arena.allocator();
     var nodes = std.ArrayList(Node(r.Vector3)).empty;
 
-    try nodes.append(node_alloc, .{
-        .position = .{ .x = 0, .y = 0, .z = 0 },
-        .direction = .{ .x = 0, .y = 0, .z = 0 },
-    });
+    // add starting nodes along the trunk
+    const trunk_spacing = TRUNK_HEIGHT_IN_CROWN / 4.0;
+    try resetTreeStartingNodes(node_alloc, &nodes, trunk_spacing);
 
-    var camera: r.Camera3D = undefined;
-    camera.position = .{ .x = 250.0, .y = 150.0, .z = 250.0 };
-    camera.target = .{ .x = 0.0, .y = 100.0, .z = 0.0 };
-    camera.up = .{ .x = 0.0, .y = 1.0, .z = 0.0 };
-    camera.fovy = 60.0;
-    camera.projection = r.CAMERA_PERSPECTIVE;
+    var camera: r.Camera3D = .{ .position = .{ .x = 350.0, .y = 280.0, .z = 350.0 }, .target = .{ .x = 0.0, .y = (BOUNDS_MIN.y + BOUNDS_MAX.y) / 2.0, .z = 0.0 }, .up = .{ .x = 0.0, .y = 1.0, .z = 0.0 }, .fovy = 60.0, .projection = r.CAMERA_PERSPECTIVE };
 
-    r.DisableCursor();
-
-    const connection_dist = RADIUS * 3.5;
-    const n_sides = 6;
     while (!r.WindowShouldClose()) {
-        if (r.IsKeyDown(r.KEY_SPACE)) {
+        if (r.IsKeyPressed(r.KEY_SPACE)) {
             try genAuxins(r.Vector3, &auxins);
             try killAuxins(r.Vector3, &auxins, &nodes, true);
             try calculateGrowthDir(r.Vector3, &auxins, &nodes);
@@ -276,10 +294,8 @@ fn draw_tree(arena: *std.heap.ArenaAllocator) !void {
         if (r.IsKeyPressed(r.KEY_R)) {
             auxins.clearRetainingCapacity();
             nodes.clearRetainingCapacity();
-            try nodes.append(node_alloc, .{
-                .position = .{ .x = 0, .y = 0, .z = 0 },
-                .direction = .{ .x = 0, .y = 0, .z = 0 },
-            });
+
+            try resetTreeStartingNodes(node_alloc, &nodes, trunk_spacing);
         }
 
         r.UpdateCamera(&camera, r.CAMERA_ORBITAL);
@@ -295,17 +311,33 @@ fn draw_tree(arena: *std.heap.ArenaAllocator) !void {
                     r.DARKGRAY,
                 );
 
+                // draw tree trunk
+                const trunk_bottom = r.Vector3{ .x = 0, .y = 0, .z = 0 };
+                const trunk_top = r.Vector3{ .x = 0, .y = TRUNK_TOTAL_HEIGHT, .z = 0 };
+                r.DrawCylinderEx(trunk_bottom, trunk_top, TRUNK_RADIUS, TRUNK_RADIUS, CYLINDER_SIDES, TRUNK_COLOR);
+
                 for (auxins.items) |auxin| {
-                    r.DrawSphere(auxin.position, AUXIN_RADIUS_3D, AUXIN_COLOR);
+                    r.DrawSphere(auxin.position, RADIUS, AUXIN_COLOR);
                 }
 
-                for (nodes.items, 0..) |node_a, i| {
-                    for (nodes.items[i + 1 ..]) |node_b| {
-                        const dist = r.Vector3Distance(node_a.position, node_b.position);
-                        if (dist > 0.1 and dist < connection_dist) {
-                            const radius = @as(f32, RADIUS) * 0.3;
-                            r.DrawCylinderEx(node_a.position, node_b.position, radius, radius, n_sides, BRANCH_COLOR);
-                        }
+                for (nodes.items, 0..) |node, i| {
+                    if (node.parent) |parent_idx| {
+                        const parent = nodes.items[parent_idx];
+
+                        // calculate branch radius, makes branches thinner as they go up
+                        const reduce_fraction = @max(0.2, 1.0 - (@as(f32, @floatFromInt(node.depth)) * 0.3));
+                        const branch_radius = BRANCH_BASE_RADIUS * reduce_fraction;
+
+                        // add some color variation to branches
+                        const variation = @as(i32, @intCast(i % 20)) - 10;
+                        const branch_color = r.Color{
+                            .r = @intCast(@max(0, @min(255, @as(i32, BRANCH_COLOR.r) + variation))),
+                            .g = @intCast(@max(0, @min(255, @as(i32, BRANCH_COLOR.g) + variation))),
+                            .b = @intCast(@max(0, @min(255, @as(i32, BRANCH_COLOR.b) + variation))),
+                            .a = 255,
+                        };
+
+                        r.DrawCylinderEx(parent.position, node.position, branch_radius, branch_radius, CYLINDER_SIDES, branch_color);
                     }
                 }
             }
