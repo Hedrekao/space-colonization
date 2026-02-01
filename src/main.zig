@@ -21,15 +21,15 @@ const SCREEN_WIDTH = 1280;
 const SCREEN_HEIGHT = 960;
 
 const TRUNK_BASE_HEIGHT = 100;
-const TRUNK_HEIGHT_IN_CROWN = 80; // How much trunk extends into crown
+const TRUNK_HEIGHT_IN_CROWN = 80;
 const TRUNK_TOTAL_HEIGHT = TRUNK_BASE_HEIGHT + TRUNK_HEIGHT_IN_CROWN;
 const TRUNK_RADIUS = 20;
 
 const BRANCH_BASE_RADIUS = @as(f32, RADIUS) * 0.4;
 const CYLINDER_SIDES = 12;
 
-const BOUNDS_MIN = r.Vector3{ .x = -150, .y = TRUNK_BASE_HEIGHT, .z = -150 };
-const BOUNDS_MAX = r.Vector3{ .x = 150, .y = TRUNK_BASE_HEIGHT + 300, .z = 150 };
+const CROWN_RADIUS = 200;
+const CROWN_CENTER_Y = TRUNK_BASE_HEIGHT + CROWN_RADIUS;
 
 fn Auxin(comptime T: type) type {
     return struct {
@@ -53,11 +53,20 @@ fn genRandomPos(comptime T: type) T {
             .y = @floatFromInt(r.GetRandomValue(0, SCREEN_HEIGHT)),
         },
         r.Vector3 => {
-            return r.Vector3{
-                .x = @floatFromInt(r.GetRandomValue(@intFromFloat(BOUNDS_MIN.x), @intFromFloat(BOUNDS_MAX.x))),
-                .y = @floatFromInt(r.GetRandomValue(@intFromFloat(BOUNDS_MIN.y), @intFromFloat(BOUNDS_MAX.y))),
-                .z = @floatFromInt(r.GetRandomValue(@intFromFloat(BOUNDS_MIN.z), @intFromFloat(BOUNDS_MAX.z))),
-            };
+            while (true) {
+                const x = @as(f32, @floatFromInt(r.GetRandomValue(-1000, 1000))) / 1000.0;
+                const y = @as(f32, @floatFromInt(r.GetRandomValue(-1000, 1000))) / 1000.0;
+                const z = @as(f32, @floatFromInt(r.GetRandomValue(-1000, 1000))) / 1000.0;
+
+                const len_sq = x * x + y * y + z * z;
+                if (len_sq <= 1.0 and len_sq > 0.0) {
+                    return r.Vector3{
+                        .x = x * CROWN_RADIUS,
+                        .y = y * CROWN_RADIUS + CROWN_CENTER_Y,
+                        .z = z * CROWN_RADIUS,
+                    };
+                }
+            }
         },
         else => @compileError("Unsupported type"),
     }
@@ -273,14 +282,17 @@ fn draw_tree(arena: *std.heap.ArenaAllocator) !void {
     var aux_buf: [MAX_AUXINS]Auxin(r.Vector3) = undefined;
     var auxins = std.ArrayList(Auxin(r.Vector3)).initBuffer(&aux_buf);
 
+    var hide_bounding_sphere = false;
+
     const node_alloc = arena.allocator();
     var nodes = std.ArrayList(Node(r.Vector3)).empty;
 
     // add starting nodes along the trunk
     const trunk_spacing = TRUNK_HEIGHT_IN_CROWN / 4.0;
     try resetTreeStartingNodes(node_alloc, &nodes, trunk_spacing);
+    const sphere_center = r.Vector3{ .x = 0, .y = CROWN_CENTER_Y, .z = 0 };
 
-    var camera: r.Camera3D = .{ .position = .{ .x = 350.0, .y = 280.0, .z = 350.0 }, .target = .{ .x = 0.0, .y = (BOUNDS_MIN.y + BOUNDS_MAX.y) / 2.0, .z = 0.0 }, .up = .{ .x = 0.0, .y = 1.0, .z = 0.0 }, .fovy = 60.0, .projection = r.CAMERA_PERSPECTIVE };
+    var camera: r.Camera3D = .{ .position = .{ .x = 350.0, .y = 280.0, .z = 350.0 }, .target = .{ .x = 0.0, .y = CROWN_CENTER_Y - 50, .z = 0.0 }, .up = .{ .x = 0.0, .y = 1.0, .z = 0.0 }, .fovy = 60.0, .projection = r.CAMERA_PERSPECTIVE };
 
     while (!r.WindowShouldClose()) {
         if (r.IsKeyPressed(r.KEY_SPACE)) {
@@ -298,6 +310,10 @@ fn draw_tree(arena: *std.heap.ArenaAllocator) !void {
             try resetTreeStartingNodes(node_alloc, &nodes, trunk_spacing);
         }
 
+        if (r.IsKeyPressed(r.KEY_Q)) {
+            hide_bounding_sphere = !hide_bounding_sphere;
+        }
+
         r.UpdateCamera(&camera, r.CAMERA_ORBITAL);
 
         r.BeginDrawing();
@@ -306,10 +322,9 @@ fn draw_tree(arena: *std.heap.ArenaAllocator) !void {
 
             r.BeginMode3D(camera);
             {
-                r.DrawBoundingBox(
-                    r.BoundingBox{ .min = BOUNDS_MIN, .max = BOUNDS_MAX },
-                    r.DARKGRAY,
-                );
+                if (!hide_bounding_sphere) {
+                    r.DrawSphereWires(sphere_center, CROWN_RADIUS, 16, 16, r.DARKGRAY);
+                }
 
                 // draw tree trunk
                 const trunk_bottom = r.Vector3{ .x = 0, .y = 0, .z = 0 };
